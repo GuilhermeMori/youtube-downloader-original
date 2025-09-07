@@ -1,0 +1,27 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "main_serverless.py",
+      "use": "@vercel/python",
+      "config": {
+        "maxLambdaSize": "50mb"
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "main_serverless.py"
+    }
+  ],
+  "env": {
+    "PYTHONPATH": ".",
+    "FLASK_ENV": "production"
+  },
+  "functions": {
+    "main_serverless.py": {
+      "maxDuration": 30
+    }
+  }
+}

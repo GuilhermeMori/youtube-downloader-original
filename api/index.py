@@ -1,23 +1,23 @@
+# api/index.py - Vercel serverless function otimizada
+
 import os
 import sys
-import tempfile
-import shutil
-import atexit
 import re
-import mimetypes
 import json
-import urllib.request
-import urllib.parse
+import random
+import time
+from urllib.parse import urlparse, parse_qs
 
-# Adicionar o diretório raiz ao path
+# Add the parent directory to the Python path
 current_dir = os.path.dirname(__file__)
 parent_dir = os.path.dirname(current_dir)
 sys.path.insert(0, parent_dir)
 
 try:
-    from flask import Flask, request, jsonify, send_from_directory, Response, Blueprint
+    from flask import Flask, request, jsonify, send_from_directory
     from flask_cors import CORS
     import yt_dlp
+    import requests
     
     # Criar aplicação Flask
     app = Flask(__name__, static_folder=os.path.join(parent_dir, 'static'))
@@ -26,114 +26,322 @@ try:
     # Configurar CORS
     CORS(app)
     
-    # Diretório temporário para processar downloads
-    downloads_dir = tempfile.mkdtemp(prefix='youtube_downloader_')
-    
-    # Função para limpar arquivos temporários
-    def cleanup_temp_files():
-        if os.path.exists(downloads_dir):
-            shutil.rmtree(downloads_dir, ignore_errors=True)
-    
-    atexit.register(cleanup_temp_files)
-    
     # Regex para validar URLs do YouTube
     YOUTUBE_URL_PATTERN = re.compile(
         r'^(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/|youtube\.com/embed/)([a-zA-Z0-9_-]{11})'
     )
     
-    def extract_video_data_from_html(video_id):
-        """Extrair dados do vídeo usando web scraping do YouTube"""
-        try:
-            url = f"https://www.youtube.com/watch?v={video_id}"
+    class ServerlessYouTubeExtractor:
+        """Extrator otimizado para ambientes serverless"""
+        
+        def __init__(self):
+            self.user_agents = [
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:121.0) Gecko/20100101 Firefox/121.0',
+                'Mozilla/5.0 (iPhone; CPU iPhone OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1',
+                'Mozilla/5.0 (Linux; Android 14; SM-G998B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+            ]
+            
+            self.referers = [
+                'https://www.youtube.com/',
+                'https://www.google.com/',
+                'https://www.bing.com/',
+                'https://duckduckgo.com/',
+            ]
+        
+        def get_random_headers(self):
+            """Gera headers aleatórios para simular diferentes navegadores"""
+            user_agent = random.choice(self.user_agents)
+            referer = random.choice(self.referers)
+            
+            is_mobile = any(mobile in user_agent.lower() for mobile in ['mobile', 'iphone', 'android'])
+            
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Accept-Encoding': 'gzip, deflate',
+                'User-Agent': user_agent,
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                'Accept-Language': random.choice([
+                    'en-US,en;q=0.9',
+                    'pt-BR,pt;q=0.9,en;q=0.8',
+                    'es-ES,es;q=0.9,en;q=0.8',
+                ]),
+                'Accept-Encoding': 'gzip, deflate, br',
                 'DNT': '1',
                 'Connection': 'keep-alive',
                 'Upgrade-Insecure-Requests': '1',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none' if 'google' in referer else 'cross-site',
+                'Sec-Fetch-User': '?1',
+                'Cache-Control': 'max-age=0',
+                'Referer': referer,
             }
             
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=10) as response:
-                html = response.read().decode('utf-8')
+            if is_mobile:
+                headers.update({
+                    'Sec-Ch-Ua-Mobile': '?1',
+                    'Sec-Ch-Ua-Platform': random.choice(['"Android"', '"iOS"', '"Windows"']),
+                })
+            else:
+                headers.update({
+                    'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+                    'Sec-Ch-Ua-Mobile': '?0',
+                    'Sec-Ch-Ua-Platform': random.choice(['"Windows"', '"macOS"', '"Linux"']),
+                })
+                
+            return headers
+        
+        def get_ydl_opts(self, use_alternative_client=False):
+            """Configurações do yt-dlp otimizadas para serverless"""
+            headers = self.get_random_headers()
             
-            # Extrair dados do JSON-LD ou meta tags
-            title = "Título não disponível"
-            description = "Descrição não disponível"
-            uploader = "Canal não identificado"
-            duration = 0
-            view_count = 0
-            upload_date = "Data não disponível"
-            
-            # Tentar extrair do JSON-LD
-            json_ld_pattern = r'<script type="application/ld\+json">(.*?)</script>'
-            json_matches = re.findall(json_ld_pattern, html, re.DOTALL)
-            
-            for json_str in json_matches:
-                try:
-                    data = json.loads(json_str)
-                    if isinstance(data, dict) and data.get('@type') == 'VideoObject':
-                        title = data.get('name', title)
-                        description = data.get('description', description)
-                        uploader = data.get('author', {}).get('name', uploader)
-                        duration = data.get('duration', duration)
-                        upload_date = data.get('uploadDate', upload_date)
-                        break
-                except:
-                    continue
-            
-            # Tentar extrair do meta tags se JSON-LD falhar
-            if title == "Título não disponível":
-                title_match = re.search(r'<title>([^<]+)</title>', html)
-                if title_match:
-                    title = title_match.group(1).replace(' - YouTube', '').strip()
-            
-            # Extrair visualizações
-            view_patterns = [
-                r'"viewCount":"(\d+)"',
-                r'"view_count":"(\d+)"',
-                r'(\d+(?:,\d+)*)\s*visualizações',
-                r'(\d+(?:,\d+)*)\s*views'
-            ]
-            
-            for pattern in view_patterns:
-                view_match = re.search(pattern, html)
-                if view_match:
-                    view_count = int(view_match.group(1).replace(',', ''))
-                    break
-            
-            # Extrair canal
-            channel_patterns = [
-                r'"ownerText":\{"runs":\[\{"text":"([^"]+)"',
-                r'"channelName":"([^"]+)"',
-                r'"author":"([^"]+)"'
-            ]
-            
-            for pattern in channel_patterns:
-                channel_match = re.search(pattern, html)
-                if channel_match:
-                    uploader = channel_match.group(1)
-                    break
-            
-            return {
-                'title': title,
-                'description': description[:500] + ('...' if len(description) > 500 else ''),
-                'uploader': uploader,
-                'duration': duration,
-                'view_count': view_count,
-                'upload_date': upload_date,
-                'thumbnail': f'https://img.youtube.com/vi/{video_id}/maxresdefault.jpg'
+            opts = {
+                'quiet': True,
+                'no_warnings': True,
+                'extractflat': False,
+                'ignoreerrors': False,
+                
+                # Headers personalizados
+                'http_headers': headers,
+                'user_agent': headers['User-Agent'],
+                'referer': headers['Referer'],
+                
+                # Configurações de rede otimizadas para serverless
+                'socket_timeout': 30,
+                'retries': 3,
+                'fragment_retries': 3,
+                'http_chunk_size': 1048576,  # 1MB chunks
+                
+                # Simula comportamento humano
+                'sleep_interval': random.uniform(0.5, 2.0),
+                'max_sleep_interval': 5,
+                
+                # Configurações específicas do YouTube
+                'extractor_args': {
+                    'youtube': {
+                        'skip': ['dash', 'hls'],
+                        'player_client': ['android', 'web', 'ios'] if use_alternative_client else ['web'],
+                        'player_skip': ['webpage'],
+                    }
+                },
+                
+                # Evita detecção de bot
+                'cookiefile': None,
+                'cookiesfrombrowser': None,
+                
+                # Configurações de formato
+                'format': 'best[height<=720]/best[height<=480]/best',
+                'merge_output_format': 'mp4',
             }
             
-        except Exception as e:
-            print(f"Erro no web scraping: {e}")
+            return opts
+        
+        def extract_video_id(self, url):
+            """Extrai o ID do vídeo da URL"""
+            patterns = [
+                r'(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/|youtube\.com/shorts/)([a-zA-Z0-9_-]{11})',
+                r'youtube\.com/v/([a-zA-Z0-9_-]{11})',
+            ]
+            
+            for pattern in patterns:
+                match = re.search(pattern, url)
+                if match:
+                    return match.group(1)
             return None
+        
+        def get_video_info_with_fallback(self, url):
+            """Obtém informações do vídeo com múltiplas estratégias de fallback"""
+            video_id = self.extract_video_id(url)
+            if not video_id:
+                raise Exception('URL do YouTube inválida')
+            
+            # Estratégia 1: Tentar com cliente web padrão
+            for attempt in range(3):
+                try:
+                    opts = self.get_ydl_opts(use_alternative_client=False)
+                    
+                    with yt_dlp.YoutubeDL(opts) as ydl:
+                        info = ydl.extract_info(url, download=False)
+                        return self._format_video_info(info)
+                        
+                except Exception as e:
+                    error_msg = str(e).lower()
+                    
+                    # Se detectou bloqueio, tenta estratégias alternativas
+                    if any(keyword in error_msg for keyword in ['blocked', 'forbidden', '403', 'rate limit', 'too many requests']):
+                        print(f"Tentativa {attempt + 1}: Bloqueio detectado, tentando estratégia alternativa...")
+                        
+                        if attempt < 2:
+                            # Estratégia 2: Usar cliente alternativo
+                            try:
+                                opts = self.get_ydl_opts(use_alternative_client=True)
+                                with yt_dlp.YoutubeDL(opts) as ydl:
+                                    info = ydl.extract_info(url, download=False)
+                                    return self._format_video_info(info)
+                            except:
+                                pass
+                            
+                            # Estratégia 3: Usar API não oficial como fallback
+                            try:
+                                fallback_info = self._get_fallback_info(video_id)
+                                if fallback_info:
+                                    return fallback_info
+                            except:
+                                pass
+                            
+                            # Espera antes da próxima tentativa
+                            delay = min(1 * (2 ** attempt), 10)
+                            time.sleep(delay + random.uniform(0, 1))
+                            continue
+                    
+                    # Se é a última tentativa, relança o erro
+                    if attempt == 2:
+                        # Retorna informações básicas como fallback final
+                        return self._get_minimal_info(video_id, url)
+                    
+                    # Espera antes da próxima tentativa
+                    delay = min(1 * (2 ** attempt), 10)
+                    time.sleep(delay + random.uniform(0, 1))
+            
+            # Fallback final
+            return self._get_minimal_info(video_id, url)
+        
+        def _format_video_info(self, info):
+            """Formata as informações do vídeo de forma consistente"""
+            return {
+                'success': True,
+                'video_id': info.get('id', ''),
+                'title': info.get('title', 'Título não disponível'),
+                'description': info.get('description', '')[:200] + '...' if info.get('description') else '',
+                'duration': self._format_duration(info.get('duration', 0)),
+                'uploader': info.get('uploader', 'Canal não identificado'),
+                'view_count': self._format_number(info.get('view_count', 0)),
+                'upload_date': self._format_date(info.get('upload_date')),
+                'thumbnail': info.get('thumbnail', f'https://img.youtube.com/vi/{info.get("id", "")}/maxresdefault.jpg'),
+                'youtube_url': info.get('webpage_url', ''),
+                'direct_link': info.get('webpage_url', ''),
+                'formats': self._extract_formats(info.get('formats', [])),
+            }
+        
+        def _get_fallback_info(self, video_id):
+            """Tenta obter informações básicas via API não oficial"""
+            try:
+                # Usa uma API pública para obter informações básicas
+                api_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
+                
+                headers = self.get_random_headers()
+                response = requests.get(api_url, headers=headers, timeout=10)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    return {
+                        'success': True,
+                        'video_id': video_id,
+                        'title': data.get('title', f'Vídeo YouTube (ID: {video_id})'),
+                        'description': 'Informações não disponíveis devido a restrições do YouTube.',
+                        'duration': 'N/A',
+                        'uploader': 'Canal não identificado',
+                        'view_count': 'N/A',
+                        'upload_date': 'Data não disponível',
+                        'thumbnail': data.get('thumbnail_url', f'https://img.youtube.com/vi/{video_id}/maxresdefault.jpg'),
+                        'youtube_url': f'https://www.youtube.com/watch?v={video_id}',
+                        'direct_link': f'https://www.youtube.com/watch?v={video_id}',
+                        'warning': 'Informações limitadas - YouTube bloqueou acesso detalhado',
+                        'formats': []
+                    }
+            except Exception as e:
+                print(f"Erro no fallback API: {e}")
+            
+            return None
+        
+        def _get_minimal_info(self, video_id, url):
+            """Retorna informações mínimas quando tudo mais falha"""
+            return {
+                'success': True,
+                'video_id': video_id,
+                'title': f'Vídeo YouTube (ID: {video_id})',
+                'description': 'Informações não disponíveis devido a restrições do YouTube. Use o link direto para acessar o vídeo.',
+                'duration': 'N/A',
+                'uploader': 'Canal não identificado',
+                'view_count': 'N/A',
+                'upload_date': 'Data não disponível',
+                'thumbnail': f'https://img.youtube.com/vi/{video_id}/maxresdefault.jpg',
+                'youtube_url': url,
+                'direct_link': url,
+                'warning': 'Informações limitadas - YouTube bloqueou acesso detalhado',
+                'formats': []
+            }
+        
+        def _extract_formats(self, formats):
+            """Extrai formatos de vídeo disponíveis"""
+            video_formats = []
+            
+            for fmt in formats:
+                if fmt.get('vcodec') and fmt.get('vcodec') != 'none':
+                    video_formats.append({
+                        'format_id': fmt.get('format_id', ''),
+                        'resolution': f"{fmt.get('height', 0)}p",
+                        'ext': fmt.get('ext', ''),
+                        'quality': fmt.get('format_note', ''),
+                        'has_audio': fmt.get('acodec') and fmt.get('acodec') != 'none',
+                        'filesize': fmt.get('filesize', 0)
+                    })
+            
+            # Ordena por qualidade
+            video_formats.sort(key=lambda x: x.get('height', 0), reverse=True)
+            return video_formats[:10]  # Limita a 10 formatos
+        
+        def _format_duration(self, duration):
+            """Formata duração em segundos para formato legível"""
+            if not duration:
+                return 'N/A'
+            
+            hours = duration // 3600
+            minutes = (duration % 3600) // 60
+            seconds = duration % 60
+            
+            if hours > 0:
+                return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+            else:
+                return f"{minutes:02d}:{seconds:02d}"
+        
+        def _format_number(self, number):
+            """Formata números grandes de forma legível"""
+            if not number:
+                return 'N/A'
+            
+            if number >= 1_000_000:
+                return f"{number/1_000_000:.1f}M"
+            elif number >= 1_000:
+                return f"{number/1_000:.1f}K"
+            else:
+                return str(number)
+        
+        def _format_date(self, date_str):
+            """Formata data de upload"""
+            if not date_str:
+                return 'Data não disponível'
+            
+            try:
+                # Formato YYYYMMDD
+                if len(date_str) == 8:
+                    year = date_str[:4]
+                    month = date_str[4:6]
+                    day = date_str[6:8]
+                    return f"{day}/{month}/{year}"
+            except:
+                pass
+            
+            return date_str
+    
+    # Instanciar o extrator
+    extractor = ServerlessYouTubeExtractor()
     
     @app.route('/api/info', methods=['POST'])
     def get_video_info():
-        """Get video information without downloading"""
+        """Get video information optimized for serverless environments"""
         if not request.is_json:
             return jsonify({'error': 'Requisição inválida, esperado JSON.'}), 415
 
@@ -147,280 +355,22 @@ try:
             return jsonify({'error': 'URL do YouTube inválida. Verifique o formato.'}), 400
 
         try:
-            # Configurações otimizadas para Vercel/serverless
-            ydl_opts = {
-                'quiet': True,
-                'no_warnings': True,
-                'extract_flat': False,
-                'writesubtitles': False,
-                'writeautomaticsub': False,
-                'ignoreerrors': True,
-                'no_check_certificate': True,
-                'extract_retries': 3,
-                'fragment_retries': 3,
-                'retries': 3,
-                'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'referer': 'https://www.youtube.com/',
-                'headers': {
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                    'Accept-Language': 'en-us,en;q=0.5',
-                    'Accept-Encoding': 'gzip, deflate',
-                    'DNT': '1',
-                    'Connection': 'keep-alive',
-                    'Upgrade-Insecure-Requests': '1',
-                },
-                'extractor_args': {
-                    'youtube': {
-                        'skip': ['hls', 'dash'],
-                        'player_skip': ['configs', 'webpage'],
-                        'player_client': ['android', 'web'],
-                    }
-                },
-                'cookiesfrombrowser': None,  # Não usar cookies
-                'geo_bypass': True,
-                'geo_bypass_country': 'US',
-            }
-            
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                
-                # Extrair informações básicas com tratamento de dados
-                def safe_get(data, key, default='N/A'):
-                    value = data.get(key, default)
-                    if value is None or value == '' or value == 'None':
-                        return default
-                    return value
-                
-                def format_duration(seconds):
-                    if not seconds or seconds == 0:
-                        return 'N/A'
-                    hours = seconds // 3600
-                    minutes = (seconds % 3600) // 60
-                    secs = seconds % 60
-                    if hours > 0:
-                        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
-                    return f"{minutes:02d}:{secs:02d}"
-                
-                def format_views(view_count):
-                    if not view_count or view_count == 0:
-                        return 'N/A'
-                    if view_count >= 1000000:
-                        return f"{view_count/1000000:.1f}M"
-                    elif view_count >= 1000:
-                        return f"{view_count/1000:.1f}K"
-                    return str(view_count)
-                
-                video_info = {
-                    'title': safe_get(info, 'title', 'Título não disponível'),
-                    'duration': format_duration(safe_get(info, 'duration', 0)),
-                    'thumbnail': safe_get(info, 'thumbnail', ''),
-                    'uploader': safe_get(info, 'uploader', 'Canal desconhecido'),
-                    'view_count': format_views(safe_get(info, 'view_count', 0)),
-                    'upload_date': safe_get(info, 'upload_date', 'Data não disponível'),
-                    'description': safe_get(info, 'description', 'Descrição não disponível')[:500] + ('...' if len(safe_get(info, 'description', '')) > 500 else '')
-                }
-                
-                return jsonify({
-                    'success': True,
-                    'video_info': video_info
-                })
-                
+            video_info = extractor.get_video_info_with_fallback(url)
+            return jsonify(video_info), 200
+
         except Exception as e:
-            # Método alternativo usando configurações mais simples
-            try:
-                simple_opts = {
-                    'quiet': True,
-                    'no_warnings': True,
-                    'extract_flat': True,
-                    'user_agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
-                }
-                
-                with yt_dlp.YoutubeDL(simple_opts) as ydl:
-                    info = ydl.extract_info(url, download=False)
-                    
-                    # Usar as mesmas funções de formatação
-                    def safe_get(data, key, default='N/A'):
-                        value = data.get(key, default)
-                        if value is None or value == '' or value == 'None':
-                            return default
-                        return value
-                    
-                    def format_duration(seconds):
-                        if not seconds or seconds == 0:
-                            return 'N/A'
-                        hours = seconds // 3600
-                        minutes = (seconds % 3600) // 60
-                        secs = seconds % 60
-                        if hours > 0:
-                            return f"{hours:02d}:{minutes:02d}:{secs:02d}"
-                        return f"{minutes:02d}:{secs:02d}"
-                    
-                    def format_views(view_count):
-                        if not view_count or view_count == 0:
-                            return 'N/A'
-                        if view_count >= 1000000:
-                            return f"{view_count/1000000:.1f}M"
-                        elif view_count >= 1000:
-                            return f"{view_count/1000:.1f}K"
-                        return str(view_count)
-                    
-                    video_info = {
-                        'title': safe_get(info, 'title', 'Título não disponível'),
-                        'duration': format_duration(safe_get(info, 'duration', 0)),
-                        'thumbnail': safe_get(info, 'thumbnail', ''),
-                        'uploader': safe_get(info, 'uploader', 'Canal desconhecido'),
-                        'view_count': format_views(safe_get(info, 'view_count', 0)),
-                        'upload_date': safe_get(info, 'upload_date', 'Data não disponível'),
-                        'description': 'Informações limitadas devido a restrições do YouTube'
-                    }
-                    
-                    return jsonify({
-                        'success': True,
-                        'video_info': video_info,
-                        'warning': 'Informações obtidas com método alternativo'
-                    })
-                    
-            except Exception as e2:
-                # Último recurso: usar web scraping para extrair dados reais
-                video_id_match = re.search(r'(?:v=|\/)([a-zA-Z0-9_-]{11})', url)
-                if video_id_match:
-                    video_id = video_id_match.group(1)
-                    
-                    # Tentar web scraping para obter dados reais
-                    scraped_data = extract_video_data_from_html(video_id)
-                    
-                    if scraped_data:
-                        # Usar dados extraídos do web scraping
-                        def format_duration(seconds):
-                            if not seconds or seconds == 0:
-                                return 'N/A'
-                            hours = seconds // 3600
-                            minutes = (seconds % 3600) // 60
-                            secs = seconds % 60
-                            if hours > 0:
-                                return f"{hours:02d}:{minutes:02d}:{secs:02d}"
-                            return f"{minutes:02d}:{secs:02d}"
-                        
-                        def format_views(view_count):
-                            if not view_count or view_count == 0:
-                                return 'N/A'
-                            if view_count >= 1000000:
-                                return f"{view_count/1000000:.1f}M"
-                            elif view_count >= 1000:
-                                return f"{view_count/1000:.1f}K"
-                            return str(view_count)
-                        
-                        video_info = {
-                            'title': scraped_data['title'],
-                            'duration': format_duration(scraped_data['duration']),
-                            'thumbnail': scraped_data['thumbnail'],
-                            'uploader': scraped_data['uploader'],
-                            'view_count': format_views(scraped_data['view_count']),
-                            'upload_date': scraped_data['upload_date'],
-                            'description': scraped_data['description']
-                        }
-                        
-                        return jsonify({
-                            'success': True,
-                            'video_info': video_info,
-                            'video_id': video_id,
-                            'youtube_url': f'https://www.youtube.com/watch?v={video_id}',
-                            'method': 'web_scraping'
-                        })
-                    else:
-                        # Fallback final: informações básicas
-                        return jsonify({
-                            'success': True,
-                            'video_info': {
-                                'title': f'Vídeo YouTube (ID: {video_id})',
-                                'duration': 'N/A',
-                                'thumbnail': f'https://img.youtube.com/vi/{video_id}/maxresdefault.jpg',
-                                'uploader': 'Canal não identificado',
-                                'view_count': 'N/A',
-                                'upload_date': 'Data não disponível',
-                                'description': 'Informações não disponíveis devido a restrições do YouTube. Use o link direto para acessar o vídeo.'
-                            },
-                            'warning': 'Informações limitadas - YouTube bloqueou acesso detalhado',
-                            'video_id': video_id,
-                            'youtube_url': f'https://www.youtube.com/watch?v={video_id}',
-                            'direct_link': f'https://www.youtube.com/watch?v={video_id}'
-                        })
-                else:
-                    return jsonify({'error': f'Erro ao obter informações do vídeo: {str(e)}'}), 500
-    
-    @app.route('/api/formats', methods=['POST'])
-    def get_formats():
-        """Obter formatos disponíveis para download"""
-        if not request.is_json:
-            return jsonify({'error': 'Requisição inválida, esperado JSON.'}), 415
-
-        data = request.get_json()
-        url = data.get('url')
-
-        if not url:
-            return jsonify({'error': 'URL não fornecida.'}), 400
-        
-        if not YOUTUBE_URL_PATTERN.match(url):
-            return jsonify({'error': 'URL do YouTube inválida. Verifique o formato.'}), 400
-
-        try:
-            # Configurações para obter formatos
-            ydl_opts = {
-                'quiet': True,
-                'no_warnings': True,
-                'listformats': True,
-                'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            }
-            
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                
-                formats = []
-                if 'formats' in info:
-                    for fmt in info['formats']:
-                        if fmt.get('vcodec') != 'none' or fmt.get('acodec') != 'none':  # Apenas formatos com vídeo ou áudio
-                            formats.append({
-                                'format_id': fmt.get('format_id', 'unknown'),
-                                'ext': fmt.get('ext', 'unknown'),
-                                'resolution': fmt.get('resolution', 'unknown'),
-                                'quality': fmt.get('quality', 0),
-                                'filesize': fmt.get('filesize', 0),
-                                'vcodec': fmt.get('vcodec', 'none'),
-                                'acodec': fmt.get('acodec', 'none'),
-                                'fps': fmt.get('fps', 0)
-                            })
-                
-                return jsonify({
-                    'success': True,
-                    'formats': formats[:20],  # Limitar a 20 formatos
-                    'total_formats': len(formats)
-                })
-                
-        except Exception as e:
-            # Fallback: retornar formatos padrão
-            default_formats = [
-                {'format_id': 'best', 'ext': 'mp4', 'resolution': 'Melhor qualidade', 'quality': 10, 'vcodec': 'avc1', 'acodec': 'mp4a'},
-                {'format_id': 'worst', 'ext': 'mp4', 'resolution': 'Menor qualidade', 'quality': 1, 'vcodec': 'avc1', 'acodec': 'mp4a'},
-                {'format_id': 'audio', 'ext': 'mp3', 'resolution': 'Apenas áudio', 'quality': 5, 'vcodec': 'none', 'acodec': 'mp3'}
-            ]
-            
-            return jsonify({
-                'success': True,
-                'formats': default_formats,
-                'warning': 'Formatos limitados devido a restrições do YouTube',
-                'error': str(e)
-            })
+            print(f"Erro ao obter informações do vídeo: {e}")
+            return jsonify({'error': 'Erro interno do servidor.'}), 500
 
     @app.route('/api/download', methods=['POST'])
     def download_video():
-        """Download de vídeo com redirecionamento para URL direta"""
+        """Download video optimized for serverless environments"""
         if not request.is_json:
             return jsonify({'error': 'Requisição inválida, esperado JSON.'}), 415
 
         data = request.get_json()
         url = data.get('url')
-        quality = data.get('quality', 'best')
-        format_type = data.get('format', 'mp4')
+        format_id = data.get('format_id')
 
         if not url:
             return jsonify({'error': 'URL não fornecida.'}), 400
@@ -429,100 +379,37 @@ try:
             return jsonify({'error': 'URL do YouTube inválida. Verifique o formato.'}), 400
 
         try:
-            # Configurações para obter URL de download direto
-            ydl_opts = {
-                'quiet': True,
-                'no_warnings': True,
-                'format': f'{quality}[ext={format_type}]' if quality != 'best' else f'best[ext={format_type}]',
-                'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'extract_flat': False,
-                'no_check_certificate': True,
-                'extractor_args': {
-                    'youtube': {
-                        'player_client': ['android', 'web'],
-                    }
-                },
-            }
+            # Para ambientes serverless, retornamos apenas o link direto
+            # O download real seria feito pelo cliente
+            video_info = extractor.get_video_info_with_fallback(url)
             
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                
-                if 'url' in info:
-                    # Retornar URL direta para download
-                    return jsonify({
-                        'success': True,
-                        'download_url': info['url'],
-                        'title': info.get('title', 'Vídeo YouTube'),
-                        'format': info.get('ext', format_type),
-                        'filesize': info.get('filesize', 0),
-                        'duration': info.get('duration', 0)
-                    })
-                else:
-                    # Se não conseguir URL direta, retornar informações para download manual
-                    video_id_match = re.search(r'(?:v=|\/)([a-zA-Z0-9_-]{11})', url)
-                    if video_id_match:
-                        video_id = video_id_match.group(1)
-                        return jsonify({
-                            'success': True,
-                            'message': 'Download direto não disponível devido a restrições do YouTube',
-                            'video_id': video_id,
-                            'youtube_url': f'https://www.youtube.com/watch?v={video_id}',
-                            'alternative_download': f'https://www.youtube.com/watch?v={video_id}',
-                            'suggestion': 'Use ferramentas como yt-dlp localmente ou extensões do navegador'
-                        })
-                    else:
-                        return jsonify({'error': 'Não foi possível obter informações de download'}), 500
-                        
+            if not video_info.get('success'):
+                return jsonify({'error': 'Não foi possível obter informações do vídeo.'}), 500
+            
+            # Retorna informações para download no cliente
+            return jsonify({
+                'success': True,
+                'video_id': video_info.get('video_id'),
+                'title': video_info.get('title'),
+                'direct_link': video_info.get('direct_link'),
+                'youtube_url': video_info.get('youtube_url'),
+                'thumbnail': video_info.get('thumbnail'),
+                'formats': video_info.get('formats', []),
+                'message': 'Para ambientes serverless, use o link direto para download'
+            }), 200
+
         except Exception as e:
-            # Fallback: retornar URL do YouTube para download manual
-            video_id_match = re.search(r'(?:v=|\/)([a-zA-Z0-9_-]{11})', url)
-            if video_id_match:
-                video_id = video_id_match.group(1)
-                return jsonify({
-                    'success': True,
-                    'message': 'Download bloqueado pelo YouTube - use link direto',
-                    'video_id': video_id,
-                    'youtube_url': f'https://www.youtube.com/watch?v={video_id}',
-                    'error': str(e)
-                })
-            else:
-                return jsonify({'error': f'Erro ao processar download: {str(e)}'}), 500
+            print(f"Erro no download: {e}")
+            return jsonify({'error': 'Erro interno do servidor.'}), 500
 
-    @app.route('/api/scrape', methods=['POST'])
-    def scrape_video():
-        """Endpoint específico para testar web scraping"""
-        if not request.is_json:
-            return jsonify({'error': 'Requisição inválida, esperado JSON.'}), 415
-
-        data = request.get_json()
-        url = data.get('url')
-
-        if not url:
-            return jsonify({'error': 'URL não fornecida.'}), 400
-        
-        if not YOUTUBE_URL_PATTERN.match(url):
-            return jsonify({'error': 'URL do YouTube inválida. Verifique o formato.'}), 400
-
-        video_id_match = re.search(r'(?:v=|\/)([a-zA-Z0-9_-]{11})', url)
-        if video_id_match:
-            video_id = video_id_match.group(1)
-            scraped_data = extract_video_data_from_html(video_id)
-            
-            if scraped_data:
-                return jsonify({
-                    'success': True,
-                    'method': 'web_scraping',
-                    'video_id': video_id,
-                    'data': scraped_data
-                })
-            else:
-                return jsonify({
-                    'success': False,
-                    'error': 'Falha ao extrair dados via web scraping',
-                    'video_id': video_id
-                })
-        else:
-            return jsonify({'error': 'ID do vídeo não encontrado na URL'}), 400
+    @app.route('/api/health', methods=['GET'])
+    def health_check():
+        """Health check endpoint for serverless environments"""
+        return jsonify({
+            'status': 'healthy',
+            'service': 'youtube-downloader-serverless',
+            'version': '1.0.0'
+        }), 200
 
     @app.route('/api/test', methods=['GET'])
     def test_api():
@@ -534,26 +421,20 @@ try:
             'status': 'online',
             'endpoints': {
                 'info': '/api/info (POST) - Obter informações do vídeo',
-                'formats': '/api/formats (POST) - Obter formatos disponíveis',
                 'download': '/api/download (POST) - Download de vídeo',
-                'scrape': '/api/scrape (POST) - Testar web scraping',
+                'health': '/api/health (GET) - Health check',
                 'test': '/api/test (GET) - Testar API'
             },
             'usage': {
                 'info': {
                     'method': 'POST',
                     'body': {'url': 'https://www.youtube.com/watch?v=VIDEO_ID'},
-                    'description': 'Obtém informações básicas do vídeo (yt-dlp + web scraping)'
-                },
-                'scrape': {
-                    'method': 'POST',
-                    'body': {'url': 'https://www.youtube.com/watch?v=VIDEO_ID'},
-                    'description': 'Testa apenas web scraping para extrair dados'
+                    'description': 'Obtém informações básicas do vídeo com anti-bloqueio'
                 },
                 'download': {
                     'method': 'POST',
-                    'body': {'url': 'https://www.youtube.com/watch?v=VIDEO_ID', 'quality': 'best', 'format': 'mp4'},
-                    'description': 'Obtém URL de download direto ou link alternativo'
+                    'body': {'url': 'https://www.youtube.com/watch?v=VIDEO_ID', 'format_id': 'best'},
+                    'description': 'Obtém informações para download'
                 }
             }
         })
