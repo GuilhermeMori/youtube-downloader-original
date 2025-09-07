@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube Downloader - Teste</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+
+        input[type="text"],
+        select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+
+        button {
+            background: #ff0000;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            width: 100%;
+        }
+
+        button:hover {
+            background: #cc0000;
+        }
+
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 5px;
+            display: none;
+        }
+
+        .success {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+
+        .error {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+
+        .video-info {
+            background: #e7f3ff;
+            border: 1px solid #b8daff;
+            color: #004085;
+        }
+
+        .loading {
+            text-align: center;
+            color: #666;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>🎥 YouTube Downloader - Teste</h1>
+
+        <div class="form-group">
+            <label for="url">URL do YouTube:</label>
+            <input type="text" id="url" placeholder="https://www.youtube.com/watch?v=VIDEO_ID" />
+        </div>
+
+        <div class="form-group">
+            <label for="action">Ação:</label>
+            <select id="action">
+                <option value="info">Obter Informações (yt-dlp + web scraping)</option>
+                <option value="scrape">Apenas Web Scraping</option>
+                <option value="download">Download</option>
+                <option value="formats">Formatos Disponíveis</option>
+            </select>
+        </div>
+
+        <button onclick="testAPI()">Testar API</button>
+
+        <div id="result" class="result"></div>
+    </div>
+
+    <script>
+        async function testAPI() {
+            const url = document.getElementById('url').value;
+            const action = document.getElementById('action').value;
+            const resultDiv = document.getElementById('result');
+
+            if (!url) {
+                showResult('Por favor, insira uma URL do YouTube', 'error');
+                return;
+            }
+
+            showResult('Carregando...', 'loading');
+
+            try {
+                let endpoint = '';
+                let body = { url: url };
+
+                if (action === 'info') {
+                    endpoint = '/api/info';
+                } else if (action === 'scrape') {
+                    endpoint = '/api/scrape';
+                } else if (action === 'download') {
+                    endpoint = '/api/download';
+                    body.quality = 'best';
+                    body.format = 'mp4';
+                } else if (action === 'formats') {
+                    endpoint = '/api/formats';
+                }
+
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(body)
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    if (action === 'info') {
+                        const info = data.video_info;
+                        const method = data.method || 'yt-dlp';
+                        showResult(`
+                            <h3>✅ Informações do Vídeo (${method}):</h3>
+                            <p><strong>Título:</strong> ${info.title}</p>
+                            <p><strong>Canal:</strong> ${info.uploader}</p>
+                            <p><strong>Duração:</strong> ${info.duration}</p>
+                            <p><strong>Visualizações:</strong> ${info.view_count}</p>
+                            <p><strong>Data:</strong> ${info.upload_date}</p>
+                            <p><strong>Descrição:</strong> ${info.description}</p>
+                            ${info.thumbnail ? `<img src="${info.thumbnail}" style="max-width: 300px; margin-top: 10px;" />` : ''}
+                        `, 'video-info');
+                    } else if (action === 'scrape') {
+                        const info = data.data;
+                        showResult(`
+                            <h3>🔍 Web Scraping Resultado:</h3>
+                            <p><strong>Método:</strong> ${data.method}</p>
+                            <p><strong>ID do Vídeo:</strong> ${data.video_id}</p>
+                            <p><strong>Título:</strong> ${info.title}</p>
+                            <p><strong>Canal:</strong> ${info.uploader}</p>
+                            <p><strong>Duração:</strong> ${info.duration} segundos</p>
+                            <p><strong>Visualizações:</strong> ${info.view_count}</p>
+                            <p><strong>Data:</strong> ${info.upload_date}</p>
+                            <p><strong>Descrição:</strong> ${info.description}</p>
+                            ${info.thumbnail ? `<img src="${info.thumbnail}" style="max-width: 300px; margin-top: 10px;" />` : ''}
+                        `, 'video-info');
+                    } else if (action === 'download') {
+                        if (data.download_url) {
+                            showResult(`
+                                <h3>✅ Download Disponível:</h3>
+                                <p><strong>Título:</strong> ${data.title}</p>
+                                <p><strong>Formato:</strong> ${data.format}</p>
+                                <p><strong>Tamanho:</strong> ${data.filesize ? (data.filesize / 1024 / 1024).toFixed(2) + ' MB' : 'N/A'}</p>
+                                <a href="${data.download_url}" target="_blank" style="background: #ff0000; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; margin-top: 10px;">⬇️ Baixar Vídeo</a>
+                            `, 'success');
+                        } else {
+                            showResult(`
+                                <h3>⚠️ Download Limitado:</h3>
+                                <p>${data.message}</p>
+                                <p><strong>Link do YouTube:</strong> <a href="${data.youtube_url}" target="_blank">${data.youtube_url}</a></p>
+                                <p><strong>Sugestão:</strong> ${data.suggestion}</p>
+                            `, 'error');
+                        }
+                    } else if (action === 'formats') {
+                        const formats = data.formats || [];
+                        let formatsHtml = '<h3>✅ Formatos Disponíveis:</h3><ul>';
+                        formats.forEach(format => {
+                            formatsHtml += `<li><strong>${format.format_id}</strong> - ${format.ext} (${format.resolution}) - ${format.vcodec}/${format.acodec}</li>`;
+                        });
+                        formatsHtml += '</ul>';
+                        showResult(formatsHtml, 'success');
+                    }
+                } else {
+                    showResult(`❌ Erro: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                showResult(`❌ Erro de conexão: ${error.message}`, 'error');
+            }
+        }
+
+        function showResult(message, type) {
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = message;
+            resultDiv.className = `result ${type}`;
+            resultDiv.style.display = 'block';
+        }
+    </script>
+</body>
+
+</html>
