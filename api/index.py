@@ -13,7 +13,7 @@ parent_dir = os.path.dirname(current_dir)
 sys.path.insert(0, parent_dir)
 
 try:
-    from flask import Flask, request, jsonify
+    from flask import Flask, request, jsonify, send_from_directory
     from flask_cors import CORS
     import requests
     
@@ -361,12 +361,195 @@ try:
     @app.route('/', defaults={'path': ''})
     @app.route('/<path:path>')
     def serve(path):
-        return jsonify({
-            'message': 'YouTube Downloader API is running!',
-            'version': '2.1.0',
-            'status': 'online',
-            'endpoints': ['/api/info', '/api/download', '/api/health', '/api/test']
-        })
+        # Se for uma rota da API, retorna JSON
+        if path.startswith('api/'):
+            return jsonify({
+                'message': 'YouTube Downloader API is running!',
+                'version': '2.1.0',
+                'status': 'online',
+                'endpoints': ['/api/info', '/api/download', '/api/health', '/api/test']
+            })
+        
+        # Para outras rotas, serve o arquivo estático
+        static_folder = os.path.join(parent_dir, 'static')
+        
+        # Se o arquivo existe na pasta static, serve ele
+        if path and os.path.exists(os.path.join(static_folder, path)):
+            return send_from_directory(static_folder, path)
+        
+        # Senão, serve o index.html
+        index_path = os.path.join(static_folder, 'index.html')
+        if os.path.exists(index_path):
+            return send_from_directory(static_folder, 'index.html')
+        
+        # Fallback: retorna a aplicação básica
+        return """
+        <!DOCTYPE html>
+        <html lang="pt-BR">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>YouTube Downloader</title>
+            <style>
+                body { font-family: Arial, sans-serif; background-color: #f4f4f4; margin: 0; padding: 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+                .container { background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1); width: 100%; max-width: 500px; text-align: center; }
+                h1 { color: #333; }
+                input[type="text"] { width: calc(100% - 22px); padding: 10px; margin-bottom: 20px; border: 1px solid #ddd; border-radius: 4px; }
+                button { background-color: #ff0000; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; transition: background-color 0.3s; margin: 5px; }
+                #info-btn { background-color: #007bff; }
+                button:disabled { background-color: #f88; cursor: not-allowed; }
+                button:hover:not(:disabled) { background-color: #cc0000; }
+                #video-info { margin: 20px 0; padding: 15px; background-color: #f8f9fa; border-radius: 4px; text-align: left; display: none; }
+                #video-info h3 { margin-top: 0; color: #333; }
+                #format-selection { margin: 20px 0; padding: 15px; background-color: #f0f8ff; border-radius: 4px; text-align: left; }
+                #format-selection label { display: block; margin-bottom: 10px; font-weight: bold; color: #333; }
+                #format-select { width: 100%; padding: 8px; margin-bottom: 15px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }
+                #status { margin-top: 20px; font-size: 1em; color: #555; }
+                .success { color: green; }
+                .error { color: red; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>YouTube Downloader</h1>
+                <p>Cole a URL do vídeo do YouTube para baixar na melhor qualidade disponível.</p>
+                <input type="text" id="youtube-url" placeholder="https://www.youtube.com/watch?v=...">
+                <button id="info-btn">Obter Informações</button>
+                <div id="video-info"></div>
+                <div id="format-selection" style="display: none;">
+                    <label for="format-select">Escolha a resolução:</label>
+                    <select id="format-select">
+                        <option value="">Selecione uma resolução...</option>
+                    </select>
+                    <button id="download-btn">Baixar Vídeo</button>
+                </div>
+                <div id="status"></div>
+            </div>
+
+            <script>
+                const urlInput = document.getElementById('youtube-url');
+                const infoBtn = document.getElementById('info-btn');
+                const downloadBtn = document.getElementById('download-btn');
+                const videoInfoDiv = document.getElementById('video-info');
+                const formatSelectionDiv = document.getElementById('format-selection');
+                const formatSelect = document.getElementById('format-select');
+                const statusDiv = document.getElementById('status');
+
+                infoBtn.addEventListener('click', async () => {
+                    const url = urlInput.value.trim();
+                    if (!url) {
+                        showStatus('Por favor, insira uma URL do YouTube.', 'error');
+                        return;
+                    }
+
+                    infoBtn.disabled = true;
+                    infoBtn.textContent = 'Carregando...';
+                    showStatus('Obtendo informações do vídeo...', '');
+
+                    try {
+                        const response = await fetch('/api/info', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ url: url }),
+                        });
+
+                        if (!response.ok) {
+                            const errorData = await response.json();
+                            throw new Error(errorData.error || `Erro ${response.status}: ${response.statusText}`);
+                        }
+
+                        const info = await response.json();
+                        showVideoInfo(info);
+                        showFormatOptions(info.formats);
+                        showStatus('Informações carregadas com sucesso! Escolha a resolução desejada.', 'success');
+
+                    } catch (error) {
+                        showStatus(error.message, 'error');
+                        videoInfoDiv.style.display = 'none';
+                        formatSelectionDiv.style.display = 'none';
+                    } finally {
+                        infoBtn.disabled = false;
+                        infoBtn.textContent = 'Obter Informações';
+                    }
+                });
+
+                downloadBtn.addEventListener('click', async () => {
+                    const url = urlInput.value.trim();
+                    const selectedFormat = formatSelect.value;
+
+                    if (!url) {
+                        showStatus('Por favor, insira uma URL do YouTube.', 'error');
+                        return;
+                    }
+
+                    if (!selectedFormat) {
+                        showStatus('Por favor, escolha uma resolução antes de baixar.', 'error');
+                        return;
+                    }
+
+                    downloadBtn.disabled = true;
+                    downloadBtn.textContent = 'Baixando...';
+                    showStatus('Iniciando download, por favor aguarde...', '');
+
+                    try {
+                        const response = await fetch('/api/download', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ url: url, format_id: selectedFormat }),
+                        });
+
+                        if (!response.ok) {
+                            const errorData = await response.json();
+                            throw new Error(errorData.error || `Erro ${response.status}: ${response.statusText}`);
+                        }
+
+                        const data = await response.json();
+                        showStatus(`Download iniciado! Link: ${data.direct_link}`, 'success');
+
+                    } catch (error) {
+                        showStatus(error.message, 'error');
+                    } finally {
+                        downloadBtn.disabled = false;
+                        downloadBtn.textContent = 'Baixar Vídeo';
+                    }
+                });
+
+                function showStatus(message, type) {
+                    statusDiv.textContent = message;
+                    statusDiv.className = type;
+                }
+
+                function showVideoInfo(info) {
+                    videoInfoDiv.innerHTML = `
+                        <h3>${info.title}</h3>
+                        <p><strong>Canal:</strong> ${info.uploader}</p>
+                        <p><strong>Duração:</strong> ${info.duration}</p>
+                        <p><strong>Visualizações:</strong> ${info.view_count}</p>
+                        <p><strong>Descrição:</strong> ${info.description}</p>
+                    `;
+                    videoInfoDiv.style.display = 'block';
+                }
+
+                function showFormatOptions(formats) {
+                    formatSelect.innerHTML = '<option value="">Selecione uma resolução...</option>';
+
+                    if (formats && formats.length > 0) {
+                        formats.forEach(format => {
+                            const option = document.createElement('option');
+                            option.value = format.format_id;
+                            option.textContent = `${format.resolution} (${format.ext.toUpperCase()})`;
+                            formatSelect.appendChild(option);
+                        });
+                        formatSelectionDiv.style.display = 'block';
+                    } else {
+                        formatSelectionDiv.style.display = 'none';
+                        showStatus('Nenhum formato de vídeo disponível.', 'error');
+                    }
+                }
+            </script>
+        </body>
+        </html>
+        """
 
 except ImportError as e:
     # Fallback se houver problemas com imports
