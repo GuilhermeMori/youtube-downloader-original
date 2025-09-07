@@ -1,4 +1,4 @@
-# api/index.py - Vercel serverless function otimizada e simplificada
+# api/index.py - Vercel serverless function ultra-simplificada
 
 import os
 import sys
@@ -15,7 +15,6 @@ sys.path.insert(0, parent_dir)
 try:
     from flask import Flask, request, jsonify
     from flask_cors import CORS
-    import yt_dlp
     import requests
     
     # Criar aplicação Flask
@@ -104,74 +103,114 @@ try:
         else:
             return str(number)
     
+    def get_video_info_from_html(video_id):
+        """Extrai informações do vídeo via web scraping"""
+        try:
+            url = f"https://www.youtube.com/watch?v={video_id}"
+            headers = get_random_headers()
+            
+            response = requests.get(url, headers=headers, timeout=10)
+            if response.status_code != 200:
+                return None
+                
+            html = response.text
+            
+            # Extrair título
+            title = f'Vídeo YouTube (ID: {video_id})'
+            title_match = re.search(r'<title>([^<]+)</title>', html)
+            if title_match:
+                title = title_match.group(1).replace(' - YouTube', '').strip()
+            
+            # Extrair descrição
+            description = 'Descrição não disponível'
+            desc_patterns = [
+                r'"description":"([^"]+)"',
+                r'"shortDescription":"([^"]+)"',
+                r'<meta name="description" content="([^"]+)"',
+            ]
+            
+            for pattern in desc_patterns:
+                desc_match = re.search(pattern, html)
+                if desc_match:
+                    description = desc_match.group(1)[:200] + '...'
+                    break
+            
+            # Extrair canal
+            uploader = 'Canal não identificado'
+            channel_patterns = [
+                r'"ownerText":\{"runs":\[\{"text":"([^"]+)"',
+                r'"channelName":"([^"]+)"',
+                r'"author":"([^"]+)"',
+                r'<link rel="canonical" href="https://www\.youtube\.com/channel/[^"]+">([^<]+)</link>',
+            ]
+            
+            for pattern in channel_patterns:
+                channel_match = re.search(pattern, html)
+                if channel_match:
+                    uploader = channel_match.group(1)
+                    break
+            
+            # Extrair visualizações
+            view_count = 'N/A'
+            view_patterns = [
+                r'"viewCount":"(\d+)"',
+                r'"view_count":"(\d+)"',
+                r'(\d+(?:,\d+)*)\s*visualizações',
+                r'(\d+(?:,\d+)*)\s*views',
+            ]
+            
+            for pattern in view_patterns:
+                view_match = re.search(pattern, html)
+                if view_match:
+                    view_count = format_number(int(view_match.group(1).replace(',', '')))
+                    break
+            
+            # Extrair duração
+            duration = 'N/A'
+            duration_patterns = [
+                r'"lengthSeconds":"(\d+)"',
+                r'"duration":"PT(\d+)S"',
+                r'(\d+):(\d+):(\d+)',
+                r'(\d+):(\d+)',
+            ]
+            
+            for pattern in duration_patterns:
+                duration_match = re.search(pattern, html)
+                if duration_match:
+                    if ':' in duration_match.group(0):
+                        # Formato HH:MM:SS ou MM:SS
+                        parts = duration_match.group(0).split(':')
+                        if len(parts) == 3:
+                            hours, minutes, seconds = map(int, parts)
+                            duration = format_duration(hours * 3600 + minutes * 60 + seconds)
+                        elif len(parts) == 2:
+                            minutes, seconds = map(int, parts)
+                            duration = format_duration(minutes * 60 + seconds)
+                    else:
+                        # Formato em segundos
+                        duration = format_duration(int(duration_match.group(1)))
+                    break
+            
+            return {
+                'title': title,
+                'description': description,
+                'uploader': uploader,
+                'view_count': view_count,
+                'duration': duration,
+                'thumbnail': f'https://img.youtube.com/vi/{video_id}/maxresdefault.jpg',
+            }
+            
+        except Exception as e:
+            print(f"Erro no web scraping: {e}")
+            return None
+    
     def get_video_info_with_fallback(url):
         """Obtém informações do vídeo com múltiplas estratégias de fallback"""
         video_id = extract_video_id(url)
         if not video_id:
             raise Exception('URL do YouTube inválida')
         
-        # Estratégia 1: Tentar com yt-dlp simples
-        for attempt in range(3):
-            try:
-                headers = get_random_headers()
-                
-                opts = {
-                    'quiet': True,
-                    'no_warnings': True,
-                    'extractflat': False,
-                    'ignoreerrors': False,
-                    'http_headers': headers,
-                    'user_agent': headers['User-Agent'],
-                    'referer': headers['Referer'],
-                    'socket_timeout': 30,
-                    'retries': 2,
-                    'fragment_retries': 2,
-                    'sleep_interval': random.uniform(0.5, 2.0),
-                    'max_sleep_interval': 5,
-                    'extractor_args': {
-                        'youtube': {
-                            'skip': ['dash', 'hls'],
-                            'player_client': ['web', 'android'],
-                        }
-                    },
-                    'cookiefile': None,
-                    'cookiesfrombrowser': None,
-                }
-                
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    info = ydl.extract_info(url, download=False)
-                    
-                    return {
-                        'success': True,
-                        'video_id': info.get('id', video_id),
-                        'title': info.get('title', f'Vídeo YouTube (ID: {video_id})'),
-                        'description': info.get('description', '')[:200] + '...' if info.get('description') else '',
-                        'duration': format_duration(info.get('duration', 0)),
-                        'uploader': info.get('uploader', 'Canal não identificado'),
-                        'view_count': format_number(info.get('view_count', 0)),
-                        'upload_date': info.get('upload_date', 'Data não disponível'),
-                        'thumbnail': info.get('thumbnail', f'https://img.youtube.com/vi/{video_id}/maxresdefault.jpg'),
-                        'youtube_url': info.get('webpage_url', url),
-                        'direct_link': info.get('webpage_url', url),
-                        'formats': []
-                    }
-                    
-            except Exception as e:
-                error_msg = str(e).lower()
-                print(f"Tentativa {attempt + 1}: {error_msg}")
-                
-                if any(keyword in error_msg for keyword in ['blocked', 'forbidden', '403', 'rate limit', 'too many requests']):
-                    if attempt < 2:
-                        time.sleep(random.uniform(1, 3))
-                        continue
-                
-                # Se é a última tentativa, tenta fallback
-                if attempt == 2:
-                    break
-                
-                time.sleep(random.uniform(1, 2))
-        
-        # Estratégia 2: API não oficial
+        # Estratégia 1: API não oficial do YouTube
         try:
             api_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
             headers = get_random_headers()
@@ -196,6 +235,27 @@ try:
                 }
         except Exception as e:
             print(f"Erro no fallback API: {e}")
+        
+        # Estratégia 2: Web scraping
+        try:
+            scraped_data = get_video_info_from_html(video_id)
+            if scraped_data:
+                return {
+                    'success': True,
+                    'video_id': video_id,
+                    'title': scraped_data['title'],
+                    'description': scraped_data['description'],
+                    'duration': scraped_data['duration'],
+                    'uploader': scraped_data['uploader'],
+                    'view_count': scraped_data['view_count'],
+                    'upload_date': 'Data não disponível',
+                    'thumbnail': scraped_data['thumbnail'],
+                    'youtube_url': f'https://www.youtube.com/watch?v={video_id}',
+                    'direct_link': f'https://www.youtube.com/watch?v={video_id}',
+                    'formats': []
+                }
+        except Exception as e:
+            print(f"Erro no web scraping: {e}")
         
         # Fallback final: informações mínimas
         return {
